@@ -22,9 +22,36 @@ export default function App() {
   const [gradingResults, setGradingResults] = useState<GradingResult[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [hasKey, setHasKey] = useState<boolean>(true);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  // Fix: Removed API Key related logic and modal to follow guidelines
+  // ตรวจสอบ API Key เมื่อเริ่มใช้งาน
+  const checkApiKey = async () => {
+    try {
+      const hasSelected = await (window as any).aistudio.hasSelectedApiKey();
+      if (!hasSelected) {
+        setHasKey(false);
+      }
+    } catch (e) {
+      // หากเกิดความผิดพลาดในการเรียกฟังก์ชัน ให้ถือว่าต้องตั้งค่าใหม่
+      setHasKey(false);
+    }
+  };
+
+  useEffect(() => {
+    checkApiKey();
+  }, []);
+
+  const handleOpenKeyDialog = async () => {
+    try {
+      await (window as any).aistudio.openSelectKey();
+      // สมมติว่าสำเร็จตามคำแนะนำเพื่อลดปัญหา Race Condition
+      setHasKey(true);
+      setError(null);
+    } catch (err) {
+      setError("ไม่สามารถเปิดหน้าต่างตั้งค่า Key ได้");
+    }
+  };
 
   const handleMasterUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -36,7 +63,12 @@ export default function App() {
       setMasterConfig({ imageUrl: base64, ...result });
       setStep('verify');
     } catch (err: any) {
-      setError(err.message);
+      if (err.message && err.message.includes("Requested entity was not found")) {
+        setHasKey(false);
+        setError("API Key ของคุณไม่ถูกต้องหรือยังไม่ได้ตั้งค่า Billing กรุณาเลือกใหม่");
+      } else {
+        setError(err.message);
+      }
     } finally {
       setIsProcessing(false);
     }
@@ -59,7 +91,6 @@ export default function App() {
           canvas.width = img.width; canvas.height = img.height;
           ctx.drawImage(img, 0, 0);
           
-          // Fix: Explicitly cast entries and use empty string for null results to satisfy TypeScript requirements
           const details = (Object.entries(masterConfig.correctAnswers) as [string, string][]).map(([qNum, correct]) => {
             const num = parseInt(qNum);
             const choices = masterConfig.boxes.filter(b => b.questionNumber === num);
@@ -96,7 +127,34 @@ export default function App() {
       <Header />
       
       <main className="container mx-auto p-4 py-8 max-w-4xl">
-        {/* Fix: Removed API Key Modal Section */}
+        {/* API Key Modal Overlay */}
+        {!hasKey && (
+          <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-md z-[100] flex items-center justify-center p-4">
+            <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-8 text-center animate-fadeIn">
+              <div className="w-20 h-20 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-6">
+                <i className="fas fa-key text-3xl"></i>
+              </div>
+              <h2 className="text-2xl font-bold text-slate-800 mb-2">กรุณาตั้งค่า API Key</h2>
+              <p className="text-slate-500 mb-8 text-sm">คุณต้องเลือก API Key ที่เปิดใช้งาน Billing แล้วเพื่อใช้ระบบ AI ในการวิเคราะห์ข้อสอบ</p>
+              
+              <button 
+                onClick={handleOpenKeyDialog}
+                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl shadow-lg transition-all mb-4 flex items-center justify-center gap-2"
+              >
+                <i className="fas fa-plug"></i> เลือกหรือตั้งค่า API Key
+              </button>
+              
+              <a 
+                href="https://ai.google.dev/gemini-api/docs/billing" 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="text-xs text-blue-600 hover:underline font-medium inline-flex items-center gap-1"
+              >
+                ตรวจสอบวิธีการตั้งค่า Billing <i className="fas fa-external-link-alt text-[10px]"></i>
+              </a>
+            </div>
+          </div>
+        )}
 
         {/* Step 1: Setup */}
         {step === 'setup' && (
