@@ -22,17 +22,20 @@ export const analyzeMasterSheet = async (
   const base64Data = base64DataUrl.replace(/^data:.*;base64,/, '');
 
   const prompt = `
-    คุณคือผู้เชี่ยวชาญด้าน OMR (Optical Mark Recognition). วิเคราะห์ภาพ "กระดาษคำตอบต้นแบบเฉลย" (Master Answer Key) จำนวน ${questionCount} ข้อ.
+    วิเคราะห์ภาพ "ต้นแบบเฉลย" (Answer Key) จำนวน ${questionCount} ข้อ.
     
-    ภารกิจ:
-    1. ค้นหาตำแหน่งของช่องตัวเลือกทั้งหมด (ก, ข, ค, ง, จ) สำหรับทุกข้อ (1 ถึง ${questionCount}).
-    2. ระบุว่าช่องตัวเลือกใดที่ "ครูได้ทำเครื่องหมายเฉลยไว้" (เช่น การกากบาท X, การฝนดำเต็มช่อง, หรือการวงกลมล้อมรอบรหัสตัวเลือก).
-    3. ในแต่ละข้อ จะต้องมีเฉลยที่ถูกต้อง "เพียงตัวเลือกเดียว" เท่านั้นที่ถูกตั้งค่าเป็น isMarked: true.
-    4. ห้ามข้ามข้อ ตรวจสอบให้ครบถ้วนตั้งแตข้อ 1 จนถึงข้อที่ ${questionCount}.
+    ลักษณะการวางเลย์เอาต์:
+    - ข้อสอบแต่ละข้อจะจัดวางเป็นแถวแนวนอน
+    - ในแต่ละข้อจะมีช่องคำตอบ 4 ช่อง เรียงจากซ้ายไปขวา คือ: ช่องที่ 1 (ก), ช่องที่ 2 (ข), ช่องที่ 3 (ค), และช่องที่ 4 (ง)
+    - เฉลยที่ถูกต้องจะถูกระบุด้วย "รอยกากบาท (X)" หรือรอยขีดเขียนชัดเจนภายในช่องใดช่องหนึ่ง
     
-    คำอธิบายการแมป: ก=A, ข=B, ค=C, ง=D, จ=E.
+    ภารกิจของคุณ:
+    1. ตรวจหาพิกัด (x, y, w, h เป็น % 0-100) ของทั้ง 4 ช่อง (ก, ข, ค, ง) สำหรับทุกข้อ (1 ถึง ${questionCount})
+    2. วิเคราะห์รอยมาร์ค: ในแต่ละข้อ ให้ระบุว่าช่องใด (ก, ข, ค หรือ ง) ที่ครูทำเครื่องหมาย "กากบาท (X)" ไว้
+    3. ตั้งค่า "isMarked": true เฉพาะช่องที่มีรอยกากบาทนั้น (1 ข้อต้องมี isMarked: true เพียง 1 ช่อง)
+    4. ตรวจสอบให้ครบทุกข้อ ห้ามข้ามลำดับ
     
-    ส่งผลลัพธ์เป็นรูปแบบ JSON ตาม Schema ที่กำหนดไว้อย่างเคร่งครัด.
+    ส่งผลลัพธ์เป็น JSON ตาม Schema ที่กำหนด.
   `;
 
   try {
@@ -45,7 +48,7 @@ export const analyzeMasterSheet = async (
         ]
       },
       config: {
-        systemInstruction: "คุณคือระบบ AI ตรวจข้อสอบอัจฉริยะ ทำหน้าที่วิเคราะห์ตำแหน่งของช่องคำตอบและระบุตัวเลือกที่ครูมาร์คเป็นเฉลยจากภาพต้นแบบ (Master Key) ด้วยความแม่นยำสูงสุด",
+        systemInstruction: "คุณคือระบบ OMR อัจฉริยะที่เชี่ยวชาญการตรวจจับรอยกากบาท (X) ในช่องคำตอบแบบแนวนอน 4 ตัวเลือก (ก, ข, ค, ง) หน้าที่ของคุณคือระบุตำแหน่งของทุกช่องและชี้ชัดว่าช่องใดคือเฉลยที่ครูมาร์คไว้",
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
@@ -55,13 +58,13 @@ export const analyzeMasterSheet = async (
               items: {
                 type: Type.OBJECT,
                 properties: {
-                  questionNumber: { type: Type.INTEGER, description: "ลำดับข้อสอบ" },
-                  optionLabel: { type: Type.STRING, description: "ตัวเลือก (ก, ข, ค, ง, จ)" },
-                  x: { type: Type.NUMBER, description: "พิกัด X (0-100%)" },
-                  y: { type: Type.NUMBER, description: "พิกัด Y (0-100%)" },
-                  w: { type: Type.NUMBER, description: "ความกว้าง (0-100%)" },
-                  h: { type: Type.NUMBER, description: "ความสูง (0-100%)" },
-                  isMarked: { type: Type.BOOLEAN, description: "จริง หากเป็นช่องที่ครูมาร์คเฉลยไว้" }
+                  questionNumber: { type: Type.INTEGER },
+                  optionLabel: { type: Type.STRING },
+                  x: { type: Type.NUMBER },
+                  y: { type: Type.NUMBER },
+                  w: { type: Type.NUMBER },
+                  h: { type: Type.NUMBER },
+                  isMarked: { type: Type.BOOLEAN }
                 },
                 required: ['questionNumber', 'optionLabel', 'x', 'y', 'w', 'h', 'isMarked']
               }
@@ -79,7 +82,7 @@ export const analyzeMasterSheet = async (
     const data = JSON.parse(jsonStr);
     
     if (!data.boxes || !Array.isArray(data.boxes)) {
-      throw new Error("ข้อมูล JSON ที่ได้รับไม่ถูกต้อง");
+      throw new Error("ข้อมูลที่ได้รับไม่อยู่ในรูปแบบที่กำหนด");
     }
 
     const boxes: BoxCoordinate[] = data.boxes.map((b: any, i: number) => ({
@@ -87,7 +90,7 @@ export const analyzeMasterSheet = async (
       ...b
     }));
 
-    // สร้างตารางเฉลยคำตอบ (Correct Answers Map)
+    // สร้าง Map สำหรับเฉลยที่ถูกต้อง
     const correctAnswers: Record<number, string> = {};
     data.boxes.forEach((b: any) => {
       if (b.isMarked === true) {
@@ -112,12 +115,10 @@ export const checkInkDensity = (ctx: CanvasRenderingContext2D, box: BoxCoordinat
   const h = (box.h / 100) * ch;
   
   try {
-    // วิเคราะห์ความเข้มเฉพาะส่วนกลางของช่อง (60% ตรงกลาง) เพื่อหลีกเลี่ยงเส้นขอบ
     const data = ctx.getImageData(x+(w*0.2), y+(h*0.2), w*0.6, h*0.6).data;
     let darkPixels = 0;
     for (let i = 0; i < data.length; i += 4) {
       const brightness = (data[i] + data[i+1] + data[i+2]) / 3;
-      // ความสว่างน้อยกว่า 160 ถือเป็นรอยดำ/รอยมาร์ค
       if (brightness < 160) darkPixels++;
     }
     return darkPixels / (w*0.6 * h*0.6);
