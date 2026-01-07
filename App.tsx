@@ -1,5 +1,5 @@
 
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { MasterConfig, GradingResult, BoxCoordinate } from './types.ts';
 import { analyzeMasterSheet, checkInkDensity, fileToBase64 } from './services/imageProcessor.ts';
 
@@ -47,13 +47,39 @@ export default function App() {
   const [masterConfig, setMasterConfig] = useState<MasterConfig | null>(null);
   const [gradingResults, setGradingResults] = useState<GradingResult[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  
+  // API Key State
+  const [showApiKeyInput, setShowApiKeyInput] = useState(false);
+  const [inputKey, setInputKey] = useState('');
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  // ตรวจสอบ API Key เมื่อเริ่มใช้งาน
+  useEffect(() => {
+    if (!process.env.API_KEY || process.env.API_KEY === "") {
+      setShowApiKeyInput(true);
+    }
+  }, []);
+
+  const handleSaveApiKey = () => {
+    if (inputKey.trim()) {
+      (window as any).process.env.API_KEY = inputKey.trim();
+      setShowApiKeyInput(false);
+      setErrorMessage(null);
+    } else {
+      setErrorMessage("กรุณากรอก API Key ก่อนใช้งาน");
+    }
+  };
 
   // 1. Setup Master Sheet
   const handleMasterUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    if (!process.env.API_KEY || process.env.API_KEY === "") {
+      setShowApiKeyInput(true);
+      return;
+    }
 
     setIsProcessing(true);
     setErrorMessage(null);
@@ -159,6 +185,49 @@ export default function App() {
       <Header />
 
       <main className="flex-grow container mx-auto px-4 py-8">
+        {/* API Key Modal */}
+        {showApiKeyInput && (
+          <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-[200] flex items-center justify-center p-4">
+            <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-8 animate-fadeIn border border-blue-100">
+              <div className="text-center mb-6">
+                <div className="w-16 h-16 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                  <i className="fas fa-key text-2xl"></i>
+                </div>
+                <h2 className="text-2xl font-bold text-slate-800">กรุณาตั้งค่า API Key</h2>
+                <p className="text-slate-500 text-sm mt-2">เพื่อเปิดใช้งานระบบตรวจข้อสอบด้วย AI (Gemini)</p>
+              </div>
+              
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-2 ml-1">Gemini API Key</label>
+                  <input 
+                    type="password" 
+                    value={inputKey}
+                    onChange={(e) => setInputKey(e.target.value)}
+                    placeholder="ใส่รหัส API Key ของคุณที่นี่..."
+                    className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all font-mono"
+                  />
+                </div>
+                
+                <button 
+                  onClick={handleSaveApiKey}
+                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl shadow-lg shadow-blue-200 transition-all flex items-center justify-center gap-2"
+                >
+                  <i className="fas fa-save"></i> บันทึกและเริ่มใช้งาน
+                </button>
+                
+                <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
+                  <p className="text-[11px] text-slate-500 leading-relaxed">
+                    <i className="fas fa-info-circle mr-1"></i> 
+                    รหัสนี้จะถูกใช้เพื่อประมวลผลรูปภาพเท่านั้น คุณสามารถขอรหัสฟรีได้ที่ 
+                    <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="text-blue-600 hover:underline font-bold ml-1">Google AI Studio</a>
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Step Wizard */}
         <div className="max-w-4xl mx-auto mb-10">
           <div className="flex items-center justify-between text-xs md:text-sm font-medium text-slate-400">
@@ -208,6 +277,12 @@ export default function App() {
                   ถ่ายภาพหรืออัปโหลดต้นแบบ
                   <input type="file" className="hidden" accept="image/*" onChange={handleMasterUpload} />
                 </label>
+                <button 
+                  onClick={() => setShowApiKeyInput(true)}
+                  className="mt-4 text-xs text-slate-400 hover:text-blue-600 underline"
+                >
+                  <i className="fas fa-cog mr-1"></i> ตั้งค่า API Key
+                </button>
               </div>
             </div>
           </div>
