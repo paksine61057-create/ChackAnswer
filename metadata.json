@@ -1,0 +1,7 @@
+{
+  "name": "Thai School Exam Grader AI",
+  "description": "ระบบตรวจข้อสอบอัจฉริยะสำหรับครูไทย ตรวจกระดาษคำตอบด้วย AI และ Image Processing แม่นยำ รวดเร็ว ไม่ต้องออกแบบกระดาษใหม่",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
