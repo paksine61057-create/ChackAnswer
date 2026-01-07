@@ -12,8 +12,16 @@ export const analyzeMasterSheet = async (
   base64DataUrl: string, 
   questionCount: number
 ): Promise<{ boxes: BoxCoordinate[], correctAnswers: Record<number, string> }> => {
-  // Fix: Directly use process.env.API_KEY for client initialization
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+  // ดึงค่าล่าสุดจาก process.env (ซึ่งอาจถูก shim ไว้ใน window)
+  const apiKey = (process.env.API_KEY || (window as any).process?.env?.API_KEY) as string;
+  
+  // ตรวจสอบความพร้อมของ Key ก่อนส่งให้ SDK เพื่อป้องกัน Error: An API Key must be set
+  if (!apiKey || apiKey.trim() === "") {
+    throw new Error("กรุณากรอก API Key ในช่องตั้งค่าก่อนเริ่มการประมวลผล");
+  }
+
+  // สร้าง Instance ใหม่ทุกครั้งเพื่อให้มั่นใจว่าใช้ Key ล่าสุด
+  const ai = new GoogleGenAI({ apiKey: apiKey.trim() });
   const base64Data = base64DataUrl.replace(/^data:.*;base64,/, '');
 
   const prompt = `
@@ -75,6 +83,9 @@ export const analyzeMasterSheet = async (
 
     return { boxes, correctAnswers };
   } catch (error: any) {
+    if (error.message?.includes("API key")) {
+      throw new Error("API Key ไม่ถูกต้องหรือหมดอายุ กรุณาตรวจสอบอีกครั้ง");
+    }
     throw new Error("AI วิเคราะห์ภาพล้มเหลว: " + error.message);
   }
 };
