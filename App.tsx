@@ -56,13 +56,17 @@ export default function App() {
 
   // ตรวจสอบ API Key เมื่อเริ่มใช้งาน
   useEffect(() => {
-    if (!process.env.API_KEY || process.env.API_KEY === "") {
+    const apiKey = (window as any).process?.env?.API_KEY;
+    if (!apiKey || apiKey === "") {
       setShowApiKeyInput(true);
     }
   }, []);
 
   const handleSaveApiKey = () => {
     if (inputKey.trim()) {
+      if (!(window as any).process) (window as any).process = { env: {} };
+      if (!(window as any).process.env) (window as any).process.env = {};
+      
       (window as any).process.env.API_KEY = inputKey.trim();
       setShowApiKeyInput(false);
       setErrorMessage(null);
@@ -76,8 +80,10 @@ export default function App() {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (!process.env.API_KEY || process.env.API_KEY === "") {
+    const apiKey = (window as any).process?.env?.API_KEY;
+    if (!apiKey || apiKey === "") {
       setShowApiKeyInput(true);
+      e.target.value = ""; // Reset input
       return;
     }
 
@@ -97,6 +103,7 @@ export default function App() {
     } catch (err: any) {
       console.error(err);
       setErrorMessage(err.message || "ไม่สามารถวิเคราะห์กระดาษต้นแบบได้ กรุณาลองใหม่ด้วยภาพที่ชัดเจนกว่านี้");
+      e.target.value = ""; // Reset input เพื่อให้เลือกใหม่ได้
     } finally {
       setIsProcessing(false);
     }
@@ -110,68 +117,73 @@ export default function App() {
     setIsProcessing(true);
     const newResults: GradingResult[] = [];
 
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      const base64Full = await fileToBase64(file);
-      const img = new Image();
-      img.src = base64Full;
+    try {
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const base64Full = await fileToBase64(file);
+        const img = new Image();
+        img.src = base64Full;
 
-      await new Promise((resolve) => {
-        img.onload = () => {
-          const canvas = canvasRef.current;
-          if (!canvas) return resolve(null);
-          
-          const ctx = canvas.getContext('2d');
-          if (!ctx) return resolve(null);
+        await new Promise((resolve) => {
+          img.onload = () => {
+            const canvas = canvasRef.current;
+            if (!canvas) return resolve(null);
+            
+            const ctx = canvas.getContext('2d');
+            if (!ctx) return resolve(null);
 
-          canvas.width = img.width;
-          canvas.height = img.height;
-          ctx.drawImage(img, 0, 0);
+            canvas.width = img.width;
+            canvas.height = img.height;
+            ctx.drawImage(img, 0, 0);
 
-          const studentAnswers: Record<number, { label: string, density: number }[]> = {};
-          
-          masterConfig.boxes.forEach(box => {
-            const density = checkInkDensity(ctx, box, canvas.width, canvas.height);
-            if (!studentAnswers[box.questionNumber]) studentAnswers[box.questionNumber] = [];
-            // เกณฑ์การตรวจจับรอยปากกานักเรียน (Ink threshold 8%)
-            if (density > 0.08) { 
-              studentAnswers[box.questionNumber].push({ label: box.optionLabel, density });
-            }
-          });
+            const studentAnswers: Record<number, { label: string, density: number }[]> = {};
+            
+            masterConfig.boxes.forEach(box => {
+              const density = checkInkDensity(ctx, box, canvas.width, canvas.height);
+              if (!studentAnswers[box.questionNumber]) studentAnswers[box.questionNumber] = [];
+              if (density > 0.08) { 
+                studentAnswers[box.questionNumber].push({ label: box.optionLabel, density });
+              }
+            });
 
-          const details = Object.entries(masterConfig.correctAnswers).map(([qNumStr, correct]) => {
-            const qNum = parseInt(qNumStr);
-            const marks = studentAnswers[qNum] || [];
-            const studentAns = marks.length === 1 ? marks[0].label : null;
-            const isWarning = marks.length > 1; 
-            const correctStr = correct as string;
+            const details = Object.entries(masterConfig.correctAnswers).map(([qNumStr, correct]) => {
+              const qNum = parseInt(qNumStr);
+              const marks = studentAnswers[qNum] || [];
+              const studentAns = marks.length === 1 ? marks[0].label : null;
+              const isWarning = marks.length > 1; 
+              const correctStr = correct as string;
 
-            return {
-              question: qNum,
-              studentAnswer: studentAns,
-              correctAnswer: correctStr,
-              isCorrect: studentAns === correctStr,
-              isWarning: isWarning
-            };
-          });
+              return {
+                question: qNum,
+                studentAnswer: studentAns,
+                correctAnswer: correctStr,
+                isCorrect: studentAns === correctStr,
+                isWarning: isWarning
+              };
+            });
 
-          const score = details.filter(d => d.isCorrect).length;
+            const score = details.filter(d => d.isCorrect).length;
 
-          newResults.push({
-            studentId: `STU-${Math.floor(1000 + Math.random() * 9000)}`,
-            score: score,
-            total: details.length,
-            details: details,
-            timestamp: Date.now()
-          });
-          resolve(null);
-        };
-      });
+            newResults.push({
+              studentId: `STU-${Math.floor(1000 + Math.random() * 9000)}`,
+              score: score,
+              total: details.length,
+              details: details,
+              timestamp: Date.now()
+            });
+            resolve(null);
+          };
+        });
+      }
+
+      setGradingResults(prev => [...prev, ...newResults]);
+      setStep('results');
+    } catch (err: any) {
+      setErrorMessage("เกิดข้อผิดพลาดในการตรวจข้อสอบ: " + err.message);
+    } finally {
+      setIsProcessing(false);
+      e.target.value = "";
     }
-
-    setGradingResults(prev => [...prev, ...newResults]);
-    setIsProcessing(false);
-    setStep('results');
   };
 
   const resetSystem = () => {
@@ -338,6 +350,7 @@ export default function App() {
         {/* --- Screen: Results --- */}
         {step === 'results' && (
           <div className="max-w-6xl mx-auto animate-fadeIn">
+            {/* ... ส่วนแสดงผลเดิม ... */}
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
               <div>
                 <h2 className="text-2xl font-bold">ผลการตรวจข้อสอบ ({gradingResults.length} แผ่น)</h2>
@@ -393,7 +406,7 @@ export default function App() {
                     </table>
                   </div>
                </div>
-
+               {/* ... ส่วนอื่นๆ คงเดิม ... */}
                <div className="space-y-6">
                   <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
                     <h3 className="font-bold mb-4 flex items-center gap-2">
@@ -411,22 +424,11 @@ export default function App() {
                       <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
                         <div className="bg-blue-600 h-full" style={{ width: gradingResults.length > 0 ? '65%' : '0%' }}></div>
                       </div>
-                      <div className="grid grid-cols-2 gap-4 pt-4 border-t">
-                        <div>
-                          <p className="text-slate-400 text-[10px] uppercase font-bold">สูงสุด</p>
-                          <p className="text-xl font-bold text-green-600">{gradingResults.length > 0 ? Math.max(...gradingResults.map(r => r.score)) : 0}</p>
-                        </div>
-                        <div>
-                          <p className="text-slate-400 text-[10px] uppercase font-bold">ต่ำสุด</p>
-                          <p className="text-xl font-bold text-red-500">{gradingResults.length > 0 ? Math.min(...gradingResults.map(r => r.score)) : 0}</p>
-                        </div>
-                      </div>
                     </div>
                   </div>
-
                   <div className="bg-blue-50 p-6 rounded-2xl border border-blue-100">
                     <h3 className="font-bold mb-2 text-blue-900">ส่งออกข้อมูล</h3>
-                    <p className="text-sm text-blue-700 mb-4">ดาวน์โหลดผลการตรวจข้อสอบทั้งหมดเป็นไฟล์เพื่อนำไปใช้ใน Excel หรือบันทึกคะแนน</p>
+                    <p className="text-sm text-blue-700 mb-4">ดาวน์โหลดผลการตรวจข้อสอบทั้งหมดเป็นไฟล์ XLSX</p>
                     <button className="w-full bg-green-600 hover:bg-green-700 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 shadow-sm transition-all">
                       <i className="fas fa-file-excel"></i> ดาวน์โหลด (.XLSX)
                     </button>
@@ -441,7 +443,7 @@ export default function App() {
           <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex flex-col items-center justify-center text-white text-center px-4">
             <div className="w-16 h-16 border-4 border-blue-400 border-t-transparent rounded-full animate-spin mb-4"></div>
             <p className="font-bold text-xl mb-2">AI กำลังวิเคราะห์ข้อมูล...</p>
-            <p className="text-blue-200 text-sm max-w-xs">ขั้นตอนนี้ใช้เวลาประมาณ 10-20 วินาที ขึ้นอยู่กับความซับซ้อนของกระดาษ</p>
+            <p className="text-blue-200 text-sm max-w-xs">ขั้นตอนนี้ใช้เวลาประมาณ 10-20 วินาที</p>
           </div>
         )}
 

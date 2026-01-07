@@ -6,7 +6,6 @@ import { BoxCoordinate } from "../types.ts";
  * ฟังก์ชันสกัด JSON ออกจากข้อความของ AI อย่างแม่นยำ
  */
 const extractJson = (text: string): string => {
-  // ค้นหาข้อความที่อยู่ระหว่าง { ... } หรือ [ ... ]
   const match = text.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
   if (match) return match[0];
   return text;
@@ -16,9 +15,15 @@ const extractJson = (text: string): string => {
  * วิเคราะห์กระดาษคำตอบต้นแบบด้วย AI
  */
 export const analyzeMasterSheet = async (base64DataUrl: string): Promise<{ boxes: BoxCoordinate[], correctAnswers: Record<number, string> }> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  // ดึง API Key จาก window.process เพื่อป้องกัน ReferenceError ใน Browser Module
+  const apiKey = (window as any).process?.env?.API_KEY;
   
-  // แยก MIME Type ออกจาก Base64 Data URL (เช่น data:image/png;base64,...)
+  if (!apiKey) {
+    throw new Error("ไม่พบ API Key ในระบบ กรุณาตั้งค่าก่อนใช้งาน");
+  }
+
+  const ai = new GoogleGenAI({ apiKey });
+  
   const mimeTypeMatch = base64DataUrl.match(/^data:(.*);base64,/);
   const mimeType = mimeTypeMatch ? mimeTypeMatch[1] : 'image/jpeg';
   const base64Data = base64DataUrl.replace(/^data:.*;base64,/, '');
@@ -106,7 +111,7 @@ export const analyzeMasterSheet = async (base64DataUrl: string): Promise<{ boxes
     return { boxes, correctAnswers };
   } catch (error: any) {
     console.error("AI Analysis Error:", error);
-    throw new Error(error.message || "การสื่อสารกับ AI ขัดข้อง");
+    throw new Error(error.message || "การสื่อสารกับ AI ขัดข้อง กรุณาตรวจสอบความถูกต้องของ API Key");
   }
 };
 
@@ -124,7 +129,6 @@ export const checkInkDensity = (
   const w = (box.w / 100) * canvasWidth;
   const h = (box.h / 100) * canvasHeight;
 
-  // ตัดขอบช่องคำตอบออก 15% เพื่อป้องกันการนับเส้นขอบเป็นรอยปากกา
   const padding = 0.15;
   const safeX = x + (w * padding);
   const safeY = y + (h * padding);
