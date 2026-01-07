@@ -14,8 +14,12 @@
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
     </style>
     <script>
-        // ป้องกัน Error: process is not defined สำหรับสภาพแวดล้อมเบราว์เซอร์
-        window.process = window.process || { env: { API_KEY: "" } };
+        // ป้องกัน Error: process is not defined โดยไม่ทับค่า env เดิมถ้ามีอยู่แล้ว
+        if (!window.process) {
+            window.process = { env: { API_KEY: "" } };
+        } else if (!window.process.env) {
+            window.process.env = { API_KEY: "" };
+        }
     </script>
     <script type="importmap">
 {

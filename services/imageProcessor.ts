@@ -3,84 +3,104 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { BoxCoordinate } from "../types.ts";
 
 /**
- * Uses Gemini to learn the structure of the answer sheet from the Master image.
- * It identifies where the question boxes are located.
+ * ฟังก์ชันล้างข้อความที่ไม่ใช่ JSON ออกจากคำตอบของ AI (เช่น Markdown code blocks)
  */
-export const analyzeMasterSheet = async (base64Image: string): Promise<{ boxes: BoxCoordinate[], correctAnswers: Record<number, string> }> => {
-  // Create instance right before API call to ensure current API key is used
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  
-  const prompt = `
-    Analyze this school answer sheet. 
-    1. Identify all answer checkboxes (e.g., choices for multiple-choice questions).
-    2. The teacher has marked the correct answers with a cross (X) or similar mark.
-    3. Return a JSON list of all checkboxes found.
-    4. For each checkbox, provide: question number, option label (e.g., A, B, C, D or ก, ข, ค, ง), and its bounding box as percentages (x, y, width, height relative to image).
-    5. Also identify which options are marked as correct.
-  `;
-
-  // Using gemini-3-flash-preview as it is the recommended model for basic vision/text tasks.
-  const response = await ai.models.generateContent({
-    model: 'gemini-3-flash-preview',
-    contents: {
-      parts: [
-        { inlineData: { data: base64Image, mimeType: 'image/jpeg' } },
-        { text: prompt }
-      ]
-    },
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          boxes: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                questionNumber: { type: Type.INTEGER },
-                optionLabel: { type: Type.STRING },
-                x: { type: Type.NUMBER, description: 'Percentage from left 0-100' },
-                y: { type: Type.NUMBER, description: 'Percentage from top 0-100' },
-                w: { type: Type.NUMBER, description: 'Width percentage' },
-                h: { type: Type.NUMBER, description: 'Height percentage' },
-                isMarked: { type: Type.BOOLEAN, description: 'True if this is a correct answer marked by teacher' }
-              },
-              required: ['questionNumber', 'optionLabel', 'x', 'y', 'w', 'h', 'isMarked']
-            }
-          }
-        },
-        required: ['boxes']
-      }
-    }
-  });
-
-  const responseText = response.text || '{}';
-  const data = JSON.parse(responseText.trim());
-  const boxesData = data.boxes || [];
-
-  const boxes: BoxCoordinate[] = boxesData.map((b: any, index: number) => ({
-    id: `box-${index}`,
-    questionNumber: b.questionNumber,
-    optionLabel: b.optionLabel,
-    x: b.x,
-    y: b.y,
-    w: b.w,
-    h: b.h
-  }));
-
-  const correctAnswers: Record<number, string> = {};
-  boxesData.forEach((b: any) => {
-    if (b.isMarked) {
-      correctAnswers[b.questionNumber] = b.optionLabel;
-    }
-  });
-
-  return { boxes, correctAnswers };
+const cleanJsonResponse = (text: string): string => {
+  const jsonMatch = text.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
+  return jsonMatch ? jsonMatch[0] : text;
 };
 
 /**
- * Calculates pixel density in a specific area to detect ink.
+ * วิเคราะห์กระดาษคำตอบต้นแบบเพื่อหาตำแหน่งช่องและเฉลยที่ถูกต้อง
+ */
+export const analyzeMasterSheet = async (base64Image: string): Promise<{ boxes: BoxCoordinate[], correctAnswers: Record<number, string> }> => {
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  
+  const prompt = `
+    Analyze this school answer sheet image carefully.
+    Tasks:
+    1. Identify EVERY single answer checkbox/bubble intended for student options.
+    2. Specifically find the marks (like 'X', checkmarks, or filled circles) made by the teacher to indicate the CORRECT answers.
+    3. For each checkbox found, determine its:
+       - questionNumber (e.g., 1, 2, 3...)
+       - optionLabel (e.g., ก, ข, ค, ง or A, B, C...)
+       - bounding box as percentages of the image size (x, y, w, h).
+    4. Set "isMarked" to true ONLY if the teacher has marked that specific box as the correct answer.
+
+    Return ONLY a JSON object with a "boxes" array.
+  `;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: {
+        parts: [
+          { inlineData: { data: base64Image, mimeType: 'image/jpeg' } },
+          { text: prompt }
+        ]
+      },
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            boxes: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  questionNumber: { type: Type.INTEGER },
+                  optionLabel: { type: Type.STRING },
+                  x: { type: Type.NUMBER },
+                  y: { type: Type.NUMBER },
+                  w: { type: Type.NUMBER },
+                  h: { type: Type.NUMBER },
+                  isMarked: { type: Type.BOOLEAN }
+                },
+                required: ['questionNumber', 'optionLabel', 'x', 'y', 'w', 'h', 'isMarked']
+              }
+            }
+          },
+          required: ['boxes']
+        }
+      }
+    });
+
+    const rawText = response.text || '{}';
+    const cleanedText = cleanJsonResponse(rawText);
+    const data = JSON.parse(cleanedText);
+    const boxesData = data.boxes || [];
+
+    if (boxesData.length === 0) {
+      throw new Error("AI could not find any answer boxes in the image.");
+    }
+
+    const boxes: BoxCoordinate[] = boxesData.map((b: any, index: number) => ({
+      id: `box-${index}`,
+      questionNumber: b.questionNumber,
+      optionLabel: b.optionLabel,
+      x: b.x,
+      y: b.y,
+      w: b.w,
+      h: b.h
+    }));
+
+    const correctAnswers: Record<number, string> = {};
+    boxesData.forEach((b: any) => {
+      if (b.isMarked) {
+        correctAnswers[b.questionNumber] = b.optionLabel;
+      }
+    });
+
+    return { boxes, correctAnswers };
+  } catch (error) {
+    console.error("AI Analysis Error:", error);
+    throw error;
+  }
+};
+
+/**
+ * คำนวณความหนาแน่นของหมึกในพื้นที่ที่กำหนด
  */
 export const checkInkDensity = (
   ctx: CanvasRenderingContext2D,
@@ -93,28 +113,31 @@ export const checkInkDensity = (
   const w = (box.w / 100) * canvasWidth;
   const h = (box.h / 100) * canvasHeight;
 
-  // Safety boundaries
   const safeX = Math.max(0, Math.min(x, canvasWidth - 1));
   const safeY = Math.max(0, Math.min(y, canvasHeight - 1));
   const safeW = Math.max(1, Math.min(w, canvasWidth - safeX));
   const safeH = Math.max(1, Math.min(h, canvasHeight - safeY));
 
-  const imageData = ctx.getImageData(safeX, safeY, safeW, safeH);
-  const data = imageData.data;
-  let darkPixels = 0;
+  try {
+    const imageData = ctx.getImageData(safeX, safeY, safeW, safeH);
+    const data = imageData.data;
+    let darkPixels = 0;
 
-  // Simple thresholding: check how many pixels are dark
-  for (let i = 0; i < data.length; i += 4) {
-    const r = data[i];
-    const g = data[i + 1];
-    const b = data[i + 2];
-    const brightness = (r + g + b) / 3;
-    if (brightness < 160) { // Threshold for "dark" ink
-      darkPixels++;
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+      const brightness = (r + g + b) / 3;
+      // ปรับค่าความมืด (Threshold) ให้เหมาะกับสีปากกามากขึ้น
+      if (brightness < 170) { 
+        darkPixels++;
+      }
     }
-  }
 
-  return darkPixels / (safeW * safeH);
+    return darkPixels / (safeW * safeH);
+  } catch (e) {
+    return 0;
+  }
 };
 
 export const fileToBase64 = (file: File): Promise<string> => {
