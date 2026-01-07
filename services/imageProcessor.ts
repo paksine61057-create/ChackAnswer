@@ -3,31 +3,42 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { BoxCoordinate } from "../types.ts";
 
 /**
- * ฟังก์ชันล้างข้อความที่ไม่ใช่ JSON ออกจากคำตอบของ AI (เช่น Markdown code blocks)
+ * ฟังก์ชันสกัด JSON ออกจากข้อความของ AI อย่างแม่นยำ
  */
-const cleanJsonResponse = (text: string): string => {
-  const jsonMatch = text.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
-  return jsonMatch ? jsonMatch[0] : text;
+const extractJson = (text: string): string => {
+  // ค้นหาข้อความที่อยู่ระหว่าง { ... } หรือ [ ... ]
+  const match = text.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
+  if (match) return match[0];
+  return text;
 };
 
 /**
- * วิเคราะห์กระดาษคำตอบต้นแบบเพื่อหาตำแหน่งช่องและเฉลยที่ถูกต้อง
+ * วิเคราะห์กระดาษคำตอบต้นแบบด้วย AI
  */
-export const analyzeMasterSheet = async (base64Image: string): Promise<{ boxes: BoxCoordinate[], correctAnswers: Record<number, string> }> => {
+export const analyzeMasterSheet = async (base64DataUrl: string): Promise<{ boxes: BoxCoordinate[], correctAnswers: Record<number, string> }> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   
-  const prompt = `
-    Analyze this school answer sheet image carefully.
-    Tasks:
-    1. Identify EVERY single answer checkbox/bubble intended for student options.
-    2. Specifically find the marks (like 'X', checkmarks, or filled circles) made by the teacher to indicate the CORRECT answers.
-    3. For each checkbox found, determine its:
-       - questionNumber (e.g., 1, 2, 3...)
-       - optionLabel (e.g., ก, ข, ค, ง or A, B, C...)
-       - bounding box as percentages of the image size (x, y, w, h).
-    4. Set "isMarked" to true ONLY if the teacher has marked that specific box as the correct answer.
+  // แยก MIME Type ออกจาก Base64 Data URL (เช่น data:image/png;base64,...)
+  const mimeTypeMatch = base64DataUrl.match(/^data:(.*);base64,/);
+  const mimeType = mimeTypeMatch ? mimeTypeMatch[1] : 'image/jpeg';
+  const base64Data = base64DataUrl.replace(/^data:.*;base64,/, '');
 
-    Return ONLY a JSON object with a "boxes" array.
+  const prompt = `
+    คุณคือผู้เชี่ยวชาญด้านระบบตรวจข้อสอบ (OMR Expert). 
+    ภารกิจ: วิเคราะห์ภาพกระดาษคำตอบต้นแบบที่แนบมา
+    
+    1. ตรวจหา "ช่องคำตอบ" ทั้งหมดในกระดาษ (มักเป็นวงกลมหรือสี่เหลี่ยมเล็กๆ)
+    2. ระบุตำแหน่ง (x, y, w, h) เป็นเปอร์เซ็นต์ (0-100) เมื่อเทียบกับขนาดภาพทั้งหมด
+    3. ตรวจหาช่องที่ "คุณครูกากบาท (X)" หรือ "ระบายสี" เพื่อทำเป็นเฉลย (isMarked: true)
+    4. ระบุเลขข้อ (questionNumber) และ ตัวเลือก (optionLabel เช่น ก, ข, ค, ง หรือ A, B, C, D) ให้ถูกต้องตามที่ปรากฏในกระดาษ
+    
+    ส่งผลลัพธ์เป็น JSON Object ที่มีโครงสร้างดังนี้:
+    {
+      "boxes": [
+        { "questionNumber": 1, "optionLabel": "ก", "x": 10.5, "y": 20.2, "w": 2.1, "h": 1.5, "isMarked": true },
+        ...
+      ]
+    }
   `;
 
   try {
@@ -35,11 +46,12 @@ export const analyzeMasterSheet = async (base64Image: string): Promise<{ boxes: 
       model: 'gemini-3-flash-preview',
       contents: {
         parts: [
-          { inlineData: { data: base64Image, mimeType: 'image/jpeg' } },
+          { inlineData: { data: base64Data, mimeType: mimeType } },
           { text: prompt }
         ]
       },
       config: {
+        thinkingConfig: { thinkingBudget: 2048 },
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
@@ -67,15 +79,14 @@ export const analyzeMasterSheet = async (base64Image: string): Promise<{ boxes: 
     });
 
     const rawText = response.text || '{}';
-    const cleanedText = cleanJsonResponse(rawText);
+    const cleanedText = extractJson(rawText);
     const data = JSON.parse(cleanedText);
-    const boxesData = data.boxes || [];
-
-    if (boxesData.length === 0) {
-      throw new Error("AI could not find any answer boxes in the image.");
+    
+    if (!data.boxes || !Array.isArray(data.boxes) || data.boxes.length === 0) {
+      throw new Error("AI ตรวจไม่พบช่องคำตอบในภาพ กรุณาตรวจสอบว่าภาพไม่มืดหรือเบลอเกินไป");
     }
 
-    const boxes: BoxCoordinate[] = boxesData.map((b: any, index: number) => ({
+    const boxes: BoxCoordinate[] = data.boxes.map((b: any, index: number) => ({
       id: `box-${index}`,
       questionNumber: b.questionNumber,
       optionLabel: b.optionLabel,
@@ -86,21 +97,21 @@ export const analyzeMasterSheet = async (base64Image: string): Promise<{ boxes: 
     }));
 
     const correctAnswers: Record<number, string> = {};
-    boxesData.forEach((b: any) => {
+    data.boxes.forEach((b: any) => {
       if (b.isMarked) {
         correctAnswers[b.questionNumber] = b.optionLabel;
       }
     });
 
     return { boxes, correctAnswers };
-  } catch (error) {
+  } catch (error: any) {
     console.error("AI Analysis Error:", error);
-    throw error;
+    throw new Error(error.message || "การสื่อสารกับ AI ขัดข้อง");
   }
 };
 
 /**
- * คำนวณความหนาแน่นของหมึกในพื้นที่ที่กำหนด
+ * ตรวจสอบความหนาแน่นของรอยปากกาในแต่ละช่อง
  */
 export const checkInkDensity = (
   ctx: CanvasRenderingContext2D,
@@ -113,25 +124,26 @@ export const checkInkDensity = (
   const w = (box.w / 100) * canvasWidth;
   const h = (box.h / 100) * canvasHeight;
 
-  const safeX = Math.max(0, Math.min(x, canvasWidth - 1));
-  const safeY = Math.max(0, Math.min(y, canvasHeight - 1));
-  const safeW = Math.max(1, Math.min(w, canvasWidth - safeX));
-  const safeH = Math.max(1, Math.min(h, canvasHeight - safeY));
+  // ตัดขอบช่องคำตอบออก 15% เพื่อป้องกันการนับเส้นขอบเป็นรอยปากกา
+  const padding = 0.15;
+  const safeX = x + (w * padding);
+  const safeY = y + (h * padding);
+  const safeW = w * (1 - (padding * 2));
+  const safeH = h * (1 - (padding * 2));
 
   try {
-    const imageData = ctx.getImageData(safeX, safeY, safeW, safeH);
+    const imageData = ctx.getImageData(
+      Math.max(0, safeX), 
+      Math.max(0, safeY), 
+      Math.max(1, safeW), 
+      Math.max(1, safeH)
+    );
     const data = imageData.data;
     let darkPixels = 0;
 
     for (let i = 0; i < data.length; i += 4) {
-      const r = data[i];
-      const g = data[i + 1];
-      const b = data[i + 2];
-      const brightness = (r + g + b) / 3;
-      // ปรับค่าความมืด (Threshold) ให้เหมาะกับสีปากกามากขึ้น
-      if (brightness < 170) { 
-        darkPixels++;
-      }
+      const brightness = (data[i] + data[i + 1] + data[i + 2]) / 3;
+      if (brightness < 165) darkPixels++;
     }
 
     return darkPixels / (safeW * safeH);
@@ -144,11 +156,7 @@ export const fileToBase64 = (file: File): Promise<string> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.readAsDataURL(file);
-    reader.onload = () => {
-      const result = reader.result as string;
-      const base64 = result.includes(',') ? result.split(',')[1] : result;
-      resolve(base64);
-    };
+    reader.onload = () => resolve(reader.result as string);
     reader.onerror = error => reject(error);
   });
 };

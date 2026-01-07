@@ -59,18 +59,18 @@ export default function App() {
     setErrorMessage(null);
 
     try {
-      const base64 = await fileToBase64(file);
-      const result = await analyzeMasterSheet(base64);
+      const base64Full = await fileToBase64(file);
+      const result = await analyzeMasterSheet(base64Full);
       
       setMasterConfig({
-        imageUrl: `data:image/jpeg;base64,${base64}`,
+        imageUrl: base64Full,
         boxes: result.boxes,
         correctAnswers: result.correctAnswers
       });
       setStep('grading');
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      setErrorMessage("ไม่สามารถวิเคราะห์กระดาษต้นแบบได้ กรุณาลองใหม่ด้วยภาพที่ชัดเจนกว่านี้");
+      setErrorMessage(err.message || "ไม่สามารถวิเคราะห์กระดาษต้นแบบได้ กรุณาลองใหม่ด้วยภาพที่ชัดเจนกว่านี้");
     } finally {
       setIsProcessing(false);
     }
@@ -86,9 +86,9 @@ export default function App() {
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
-      const base64 = await fileToBase64(file);
+      const base64Full = await fileToBase64(file);
       const img = new Image();
-      img.src = `data:image/jpeg;base64,${base64}`;
+      img.src = base64Full;
 
       await new Promise((resolve) => {
         img.onload = () => {
@@ -104,11 +104,11 @@ export default function App() {
 
           const studentAnswers: Record<number, { label: string, density: number }[]> = {};
           
-          // Check ink in each box
           masterConfig.boxes.forEach(box => {
             const density = checkInkDensity(ctx, box, canvas.width, canvas.height);
             if (!studentAnswers[box.questionNumber]) studentAnswers[box.questionNumber] = [];
-            if (density > 0.05) { // Threshold for ink detection (5% of box)
+            // เกณฑ์การตรวจจับรอยปากกานักเรียน (Ink threshold 8%)
+            if (density > 0.08) { 
               studentAnswers[box.questionNumber].push({ label: box.optionLabel, density });
             }
           });
@@ -117,7 +117,7 @@ export default function App() {
             const qNum = parseInt(qNumStr);
             const marks = studentAnswers[qNum] || [];
             const studentAns = marks.length === 1 ? marks[0].label : null;
-            const isWarning = marks.length > 1; // More than 1 mark = Warning
+            const isWarning = marks.length > 1; 
             const correctStr = correct as string;
 
             return {
@@ -363,22 +363,22 @@ export default function App() {
 
         {/* Global Loading Spinner */}
         {isProcessing && (
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex flex-col items-center justify-center text-white">
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex flex-col items-center justify-center text-white text-center px-4">
             <div className="w-16 h-16 border-4 border-blue-400 border-t-transparent rounded-full animate-spin mb-4"></div>
             <p className="font-bold text-xl mb-2">AI กำลังวิเคราะห์ข้อมูล...</p>
-            <p className="text-blue-200 text-sm">กรุณารอสักครู่ ระบบกำลังประมวลผลภาพอย่างละเอียด</p>
+            <p className="text-blue-200 text-sm max-w-xs">ขั้นตอนนี้ใช้เวลาประมาณ 10-20 วินาที ขึ้นอยู่กับความซับซ้อนของกระดาษ</p>
           </div>
         )}
 
         {/* Error Notification */}
         {errorMessage && (
-          <div className="fixed bottom-10 left-1/2 -translate-x-1/2 bg-red-600 text-white px-6 py-4 rounded-2xl shadow-2xl z-[110] flex items-center gap-4 animate-bounce">
-            <i className="fas fa-exclamation-circle text-2xl"></i>
-            <div>
+          <div className="fixed bottom-10 left-1/2 -translate-x-1/2 bg-red-600 text-white px-6 py-4 rounded-2xl shadow-2xl z-[110] flex items-center gap-4 animate-bounce max-w-[90vw]">
+            <i className="fas fa-exclamation-circle text-2xl flex-shrink-0"></i>
+            <div className="overflow-hidden">
               <p className="font-bold">เกิดข้อผิดพลาด</p>
-              <p className="text-sm opacity-90">{errorMessage}</p>
+              <p className="text-xs opacity-90 truncate">{errorMessage}</p>
             </div>
-            <button onClick={() => setErrorMessage(null)} className="ml-4 hover:scale-110">
+            <button onClick={() => setErrorMessage(null)} className="ml-4 hover:scale-110 flex-shrink-0">
               <i className="fas fa-times"></i>
             </button>
           </div>
