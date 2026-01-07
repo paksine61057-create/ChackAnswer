@@ -18,21 +18,21 @@ export const analyzeMasterSheet = async (
     throw new Error("กรุณากรอก API Key ในช่องตั้งค่าก่อนเริ่มการประมวลผล");
   }
 
-  // ใช้ gemini-3-pro-preview สำหรับงานวิเคราะห์ภาพที่ต้องการความแม่นยำสูง
+  // เปลี่ยนจาก pro เป็น flash-preview เพื่อให้ใช้งานโควต้าฟรีได้เสถียรขึ้น
   const ai = new GoogleGenAI({ apiKey: apiKey.trim() });
   const base64Data = base64DataUrl.replace(/^data:.*;base64,/, '');
 
   const prompt = `
     คุณคือผู้เชี่ยวชาญด้าน OMR (Optical Mark Recognition). 
-    วิเคราะห์ภาพ "ต้นแบบเฉลย" (Answer Key) ที่มีจำนวนข้อสอบ ${questionCount} ข้อ.
+    วิเคราะห์ภาพ "ต้นแบบเฉลย" (Answer Key) จำนวน ${questionCount} ข้อ.
     
-    หน้าที่ของคุณ:
-    1. ตรวจหาพิกัด (x, y, w, h เป็น % เทียบกับขนาดภาพ 0-100) ของ "ทุกช่องตัวเลือก" (ก, ข, ค, ง, จ) ในทุกข้อ
-    2. วิเคราะห์ว่าในแต่ละข้อ "ช่องตัวเลือกใดที่มีรอยปากกากากบาท (X), รอยฝนดำ, หรือรอยติ๊ก" ซึ่งหมายถึงเฉลยที่ถูกต้อง
-    3. สำหรับช่องที่เป็นเฉลย ให้ตั้งค่า "isMarked": true (ห้ามเป็น true ทุกช่องในข้อเดียว)
-    4. ตรวจสอบให้ครบตั้งแต่ข้อที่ 1 ถึงข้อที่ ${questionCount} อย่างละเอียด
+    หน้าที่สำคัญ:
+    1. ระบุพิกัด (x, y, w, h เป็น % 0-100) ของ "ทุกช่องตัวเลือก" (ก, ข, ค, ง, จ)
+    2. ในแต่ละข้อ ให้สังเกตว่าช่องใดมี "รอยมาร์ค" (กากบาท X, ฝนดำ, หรือวงกลม) ซึ่งหมายถึงเฉลยที่ครูเลือก
+    3. ตั้งค่า "isMarked": true เฉพาะช่องที่ถูกมาร์คเป็นเฉลยเท่านั้น
+    4. ตรวจสอบให้ครบทุกข้อ (1 ถึง ${questionCount})
     
-    โครงสร้าง JSON ที่ต้องการ:
+    ส่งผลลัพธ์เป็น JSON:
     {
       "boxes": [
         { "questionNumber": 1, "optionLabel": "ก", "x": 12.5, "y": 15.0, "w": 2.0, "h": 1.5, "isMarked": true },
@@ -43,7 +43,7 @@ export const analyzeMasterSheet = async (
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-3-pro-preview',
+      model: 'gemini-3-flash-preview',
       contents: {
         parts: [{ inlineData: { data: base64Data, mimeType: 'image/jpeg' } }, { text: prompt }]
       },
@@ -74,13 +74,13 @@ export const analyzeMasterSheet = async (
     });
 
     const text = response.text;
-    if (!text) throw new Error("AI ไม่ส่งข้อมูลการวิเคราะห์กลับมา");
+    if (!text) throw new Error("AI ไม่ตอบสนองข้อมูลกลับมา");
     
     const jsonStr = extractJson(text);
     const data = JSON.parse(jsonStr);
     
     if (!data.boxes || !Array.isArray(data.boxes)) {
-      throw new Error("ข้อมูลที่ AI ส่งกลับมาไม่อยู่ในรูปแบบที่ถูกต้อง");
+      throw new Error("รูปแบบข้อมูล JSON ไม่ถูกต้อง");
     }
 
     const boxes: BoxCoordinate[] = data.boxes.map((b: any, i: number) => ({
@@ -88,7 +88,6 @@ export const analyzeMasterSheet = async (
       ...b
     }));
 
-    // ดึงค่าเฉลยจากช่องที่ AI ระบุว่า isMarked: true
     const correctAnswers: Record<number, string> = {};
     data.boxes.forEach((b: any) => {
       if (b.isMarked === true) {
@@ -98,9 +97,9 @@ export const analyzeMasterSheet = async (
 
     return { boxes, correctAnswers };
   } catch (error: any) {
-    console.error("Master Sheet Analysis Failed:", error);
-    if (error.message?.includes("API key")) {
-      throw new Error("API Key ไม่ถูกต้องหรือยังไม่ได้เลือกโปรเจคที่มีการเรียกเก็บเงิน (Billing)");
+    console.error("Analysis Error:", error);
+    if (error.message?.includes("429") || error.message?.includes("quota")) {
+      throw new Error("โควต้า API ของคุณเต็มหรือโมเดลนี้ไม่เปิดให้ใช้ฟรีในบัญชีของคุณ กรุณารอ 1 นาทีหรือตรวจสอบสถานะ Billing ใน Google AI Studio");
     }
     throw new Error("ไม่สามารถวิเคราะห์เฉลยได้: " + error.message);
   }
@@ -113,7 +112,6 @@ export const checkInkDensity = (ctx: CanvasRenderingContext2D, box: BoxCoordinat
   const h = (box.h / 100) * ch;
   
   try {
-    // วิเคราะห์ความเข้มของสีในช่อง (ลดขอบลง 15% เพื่อเลี่ยงเส้นขอบช่อง)
     const data = ctx.getImageData(x+(w*0.15), y+(h*0.15), w*0.7, h*0.7).data;
     let darkPixels = 0;
     for (let i = 0; i < data.length; i += 4) {
