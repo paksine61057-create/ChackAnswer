@@ -18,23 +18,24 @@ export const analyzeMasterSheet = async (
     throw new Error("กรุณากรอก API Key ในช่องตั้งค่าก่อนเริ่มการประมวลผล");
   }
 
+  // ใช้ gemini-3-pro-preview สำหรับงานวิเคราะห์ภาพที่ต้องการความแม่นยำสูง
   const ai = new GoogleGenAI({ apiKey: apiKey.trim() });
   const base64Data = base64DataUrl.replace(/^data:.*;base64,/, '');
 
-  // ปรับปรุง Prompt ให้ชัดเจนขึ้น เพื่อให้ AI ตรวจจับทุกช่องคำตอบและระบุว่าช่องไหนคือเฉลย
   const prompt = `
-    คุณคือผู้เชี่ยวชาญด้าน OMR (Optical Mark Recognition). วิเคราะห์ภาพกระดาษคำตอบต้นแบบ (Master Answer Key) จำนวน ${questionCount} ข้อ.
-    ภารกิจของคุณคือ:
-    1. ระบุพิกัด (x, y, w, h เป็น % เทียบกับขนาดภาพเต็ม 0-100) ของ "ทุกช่องคำตอบ" (ก, ข, ค, ง, จ) สำหรับทุกข้อตั้งแต่ข้อ 1 ถึงข้อที่ ${questionCount}.
-    2. ตรวจสอบว่าในแต่ละข้อ ช่องคำตอบใด (optionLabel) ที่ครูได้ทำเครื่องหมายเฉลยไว้ (กากบาท, ฝนดำ, หรือวงกลม) ให้ตั้งค่า isMarked: true สำหรับช่องนั้น.
-    3. ตรวจสอบให้แน่ใจว่าแต่ละข้อควรมีช่องที่ isMarked: true เพียงช่องเดียว (หากเป็นเฉลยมาตรฐาน).
-    4. รายการตัวเลือกคือ "ก", "ข", "ค", "ง", และ "จ".
+    คุณคือผู้เชี่ยวชาญด้าน OMR (Optical Mark Recognition). 
+    วิเคราะห์ภาพ "ต้นแบบเฉลย" (Answer Key) ที่มีจำนวนข้อสอบ ${questionCount} ข้อ.
     
-    ส่งผลลัพธ์เป็น JSON ตามโครงสร้างนี้เท่านั้น:
+    หน้าที่ของคุณ:
+    1. ตรวจหาพิกัด (x, y, w, h เป็น % เทียบกับขนาดภาพ 0-100) ของ "ทุกช่องตัวเลือก" (ก, ข, ค, ง, จ) ในทุกข้อ
+    2. วิเคราะห์ว่าในแต่ละข้อ "ช่องตัวเลือกใดที่มีรอยปากกากากบาท (X), รอยฝนดำ, หรือรอยติ๊ก" ซึ่งหมายถึงเฉลยที่ถูกต้อง
+    3. สำหรับช่องที่เป็นเฉลย ให้ตั้งค่า "isMarked": true (ห้ามเป็น true ทุกช่องในข้อเดียว)
+    4. ตรวจสอบให้ครบตั้งแต่ข้อที่ 1 ถึงข้อที่ ${questionCount} อย่างละเอียด
+    
+    โครงสร้าง JSON ที่ต้องการ:
     {
       "boxes": [
-        { "questionNumber": 1, "optionLabel": "ก", "x": 10.5, "y": 20.2, "w": 2.5, "h": 2.0, "isMarked": true },
-        { "questionNumber": 1, "optionLabel": "ข", "x": 14.5, "y": 20.2, "w": 2.5, "h": 2.0, "isMarked": false },
+        { "questionNumber": 1, "optionLabel": "ก", "x": 12.5, "y": 15.0, "w": 2.0, "h": 1.5, "isMarked": true },
         ...
       ]
     }
@@ -42,7 +43,7 @@ export const analyzeMasterSheet = async (
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
+      model: 'gemini-3-pro-preview',
       contents: {
         parts: [{ inlineData: { data: base64Data, mimeType: 'image/jpeg' } }, { text: prompt }]
       },
@@ -73,20 +74,21 @@ export const analyzeMasterSheet = async (
     });
 
     const text = response.text;
-    if (!text) throw new Error("AI ไม่ตอบสนองข้อมูลกลับมา");
+    if (!text) throw new Error("AI ไม่ส่งข้อมูลการวิเคราะห์กลับมา");
     
     const jsonStr = extractJson(text);
     const data = JSON.parse(jsonStr);
     
     if (!data.boxes || !Array.isArray(data.boxes)) {
-      throw new Error("โครงสร้างข้อมูล JSON ไม่ถูกต้อง");
+      throw new Error("ข้อมูลที่ AI ส่งกลับมาไม่อยู่ในรูปแบบที่ถูกต้อง");
     }
 
     const boxes: BoxCoordinate[] = data.boxes.map((b: any, i: number) => ({
-      id: `box-${i}`, ...b
+      id: `box-${i}`,
+      ...b
     }));
 
-    // สร้างตารางเฉลยที่ถูกต้องจากช่องที่ AI ตรวจพบว่ามาร์คไว้
+    // ดึงค่าเฉลยจากช่องที่ AI ระบุว่า isMarked: true
     const correctAnswers: Record<number, string> = {};
     data.boxes.forEach((b: any) => {
       if (b.isMarked === true) {
@@ -96,31 +98,28 @@ export const analyzeMasterSheet = async (
 
     return { boxes, correctAnswers };
   } catch (error: any) {
-    console.error("Analysis Error:", error);
+    console.error("Master Sheet Analysis Failed:", error);
     if (error.message?.includes("API key")) {
-      throw new Error("API Key ไม่ถูกต้องหรือหมดอายุ กรุณาตรวจสอบอีกครั้ง");
+      throw new Error("API Key ไม่ถูกต้องหรือยังไม่ได้เลือกโปรเจคที่มีการเรียกเก็บเงิน (Billing)");
     }
-    throw new Error("AI วิเคราะห์ภาพล้มเหลว: " + error.message);
+    throw new Error("ไม่สามารถวิเคราะห์เฉลยได้: " + error.message);
   }
 };
 
 export const checkInkDensity = (ctx: CanvasRenderingContext2D, box: BoxCoordinate, cw: number, ch: number): number => {
-  // การคำนวณตำแหน่งพื้นที่เพื่อตรวจความเข้มของน้ำหมึก (ใช้สำหรับการตรวจกระดาษคำตอบนักเรียน)
   const x = (box.x / 100) * cw;
   const y = (box.y / 100) * ch;
   const w = (box.w / 100) * cw;
   const h = (box.h / 100) * ch;
   
   try {
-    // ดึงข้อมูลพิกเซลจากพื้นที่ส่วนกลางของช่อง (70% ของพื้นที่ช่องทั้งหมด)
+    // วิเคราะห์ความเข้มของสีในช่อง (ลดขอบลง 15% เพื่อเลี่ยงเส้นขอบช่อง)
     const data = ctx.getImageData(x+(w*0.15), y+(h*0.15), w*0.7, h*0.7).data;
     let darkPixels = 0;
     for (let i = 0; i < data.length; i += 4) {
-      // คำนวณความสว่าง (0-255) ของพิกเซล ถ้าต่ำกว่า 165 ถือว่าเป็นสีเข้ม/รอยดำ
       const brightness = (data[i] + data[i+1] + data[i+2]) / 3;
       if (brightness < 165) darkPixels++;
     }
-    // ส่งคืนค่าความหนาแน่น (0.0 - 1.0)
     return darkPixels / (w*0.7 * h*0.7);
   } catch (e) { 
     return 0; 
