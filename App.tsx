@@ -1,7 +1,7 @@
 
 import React, { useState, useCallback, useRef } from 'react';
-import { MasterConfig, GradingResult, BoxCoordinate } from './types';
-import { analyzeMasterSheet, checkInkDensity, fileToBase64 } from './services/imageProcessor';
+import { MasterConfig, GradingResult, BoxCoordinate } from './types.ts';
+import { analyzeMasterSheet, checkInkDensity, fileToBase64 } from './services/imageProcessor.ts';
 
 // --- Helper Components ---
 
@@ -113,7 +113,6 @@ export default function App() {
             }
           });
 
-          // Fix: Explicitly cast 'correct' to string to resolve the 'unknown' type error in details mapping.
           const details = Object.entries(masterConfig.correctAnswers).map(([qNumStr, correct]) => {
             const qNum = parseInt(qNumStr);
             const marks = studentAnswers[qNum] || [];

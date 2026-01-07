@@ -1,6 +1,6 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
-import { BoxCoordinate } from "../types";
+import { BoxCoordinate } from "../types.ts";
 
 /**
  * Uses Gemini to learn the structure of the answer sheet from the Master image.
