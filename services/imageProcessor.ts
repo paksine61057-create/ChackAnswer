@@ -2,42 +2,27 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { BoxCoordinate } from "../types.ts";
 
-/**
- * ฟังก์ชันสกัด JSON ออกจากข้อความของ AI อย่างแม่นยำ
- */
 const extractJson = (text: string): string => {
   const match = text.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
   if (match) return match[0];
   return text;
 };
 
-/**
- * วิเคราะห์กระดาษคำตอบต้นแบบด้วย AI
- */
-export const analyzeMasterSheet = async (base64DataUrl: string): Promise<{ boxes: BoxCoordinate[], correctAnswers: Record<number, string> }> => {
-  // ดึง API Key จาก window.process เพื่อป้องกัน ReferenceError ใน Browser Module
-  const apiKey = (window as any).process?.env?.API_KEY;
-  
-  if (!apiKey) {
-    throw new Error("ไม่พบ API Key ในระบบ กรุณาตั้งค่าก่อนใช้งาน");
-  }
-
-  const ai = new GoogleGenAI({ apiKey });
-  
-  const mimeTypeMatch = base64DataUrl.match(/^data:(.*);base64,/);
-  const mimeType = mimeTypeMatch ? mimeTypeMatch[1] : 'image/jpeg';
+export const analyzeMasterSheet = async (
+  base64DataUrl: string, 
+  questionCount: number
+): Promise<{ boxes: BoxCoordinate[], correctAnswers: Record<number, string> }> => {
+  // Fix: Directly use process.env.API_KEY for client initialization
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
   const base64Data = base64DataUrl.replace(/^data:.*;base64,/, '');
 
   const prompt = `
-    คุณคือผู้เชี่ยวชาญด้านระบบตรวจข้อสอบ (OMR Expert). 
-    ภารกิจ: วิเคราะห์ภาพกระดาษคำตอบต้นแบบที่แนบมา
+    คุณคือผู้เชี่ยวชาญด้าน OMR. วิเคราะห์ภาพกระดาษคำตอบต้นแบบที่มีจำนวนข้อสอบทั้งหมด ${questionCount} ข้อ.
+    1. หาช่องคำตอบทั้งหมด (x, y, w, h เป็น % 0-100)
+    2. หาช่องที่ครูกากบาทเฉลยไว้ (isMarked: true) 
+    3. ตรวจสอบให้ครบทุกข้อตั้งแต่ข้อ 1 ถึง ${questionCount}
     
-    1. ตรวจหา "ช่องคำตอบ" ทั้งหมดในกระดาษ (มักเป็นวงกลมหรือสี่เหลี่ยมเล็กๆ)
-    2. ระบุตำแหน่ง (x, y, w, h) เป็นเปอร์เซ็นต์ (0-100) เมื่อเทียบกับขนาดภาพทั้งหมด
-    3. ตรวจหาช่องที่ "คุณครูกากบาท (X)" หรือ "ระบายสี" เพื่อทำเป็นเฉลย (isMarked: true)
-    4. ระบุเลขข้อ (questionNumber) และ ตัวเลือก (optionLabel เช่น ก, ข, ค, ง หรือ A, B, C, D) ให้ถูกต้องตามที่ปรากฏในกระดาษ
-    
-    ส่งผลลัพธ์เป็น JSON Object ที่มีโครงสร้างดังนี้:
+    ส่งผลลัพธ์เป็น JSON:
     {
       "boxes": [
         { "questionNumber": 1, "optionLabel": "ก", "x": 10.5, "y": 20.2, "w": 2.1, "h": 1.5, "isMarked": true },
@@ -50,13 +35,9 @@ export const analyzeMasterSheet = async (base64DataUrl: string): Promise<{ boxes
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
       contents: {
-        parts: [
-          { inlineData: { data: base64Data, mimeType: mimeType } },
-          { text: prompt }
-        ]
+        parts: [{ inlineData: { data: base64Data, mimeType: 'image/jpeg' } }, { text: prompt }]
       },
       config: {
-        thinkingConfig: { thinkingBudget: 2048 },
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
@@ -77,90 +58,47 @@ export const analyzeMasterSheet = async (base64DataUrl: string): Promise<{ boxes
                 required: ['questionNumber', 'optionLabel', 'x', 'y', 'w', 'h', 'isMarked']
               }
             }
-          },
-          required: ['boxes']
+          }
         }
       }
     });
 
-    const rawText = response.text || '{}';
-    const cleanedText = extractJson(rawText);
-    const data = JSON.parse(cleanedText);
-    
-    if (!data.boxes || !Array.isArray(data.boxes) || data.boxes.length === 0) {
-      throw new Error("AI ตรวจไม่พบช่องคำตอบในภาพ กรุณาตรวจสอบว่าภาพไม่มืดหรือเบลอเกินไป");
-    }
-
-    const boxes: BoxCoordinate[] = data.boxes.map((b: any, index: number) => ({
-      id: `box-${index}`,
-      questionNumber: b.questionNumber,
-      optionLabel: b.optionLabel,
-      x: b.x,
-      y: b.y,
-      w: b.w,
-      h: b.h
+    const data = JSON.parse(extractJson(response.text || '{}'));
+    const boxes: BoxCoordinate[] = data.boxes.map((b: any, i: number) => ({
+      id: `box-${i}`, ...b
     }));
 
     const correctAnswers: Record<number, string> = {};
     data.boxes.forEach((b: any) => {
-      if (b.isMarked) {
-        correctAnswers[b.questionNumber] = b.optionLabel;
-      }
+      if (b.isMarked) correctAnswers[b.questionNumber] = b.optionLabel;
     });
 
     return { boxes, correctAnswers };
   } catch (error: any) {
-    console.error("AI Analysis Error:", error);
-    throw new Error(error.message || "การสื่อสารกับ AI ขัดข้อง กรุณาตรวจสอบความถูกต้องของ API Key");
+    throw new Error("AI วิเคราะห์ภาพล้มเหลว: " + error.message);
   }
 };
 
-/**
- * ตรวจสอบความหนาแน่นของรอยปากกาในแต่ละช่อง
- */
-export const checkInkDensity = (
-  ctx: CanvasRenderingContext2D,
-  box: BoxCoordinate,
-  canvasWidth: number,
-  canvasHeight: number
-): number => {
-  const x = (box.x / 100) * canvasWidth;
-  const y = (box.y / 100) * canvasHeight;
-  const w = (box.w / 100) * canvasWidth;
-  const h = (box.h / 100) * canvasHeight;
-
-  const padding = 0.15;
-  const safeX = x + (w * padding);
-  const safeY = y + (h * padding);
-  const safeW = w * (1 - (padding * 2));
-  const safeH = h * (1 - (padding * 2));
-
+export const checkInkDensity = (ctx: CanvasRenderingContext2D, box: BoxCoordinate, cw: number, ch: number): number => {
+  const x = (box.x / 100) * cw;
+  const y = (box.y / 100) * ch;
+  const w = (box.w / 100) * cw;
+  const h = (box.h / 100) * ch;
   try {
-    const imageData = ctx.getImageData(
-      Math.max(0, safeX), 
-      Math.max(0, safeY), 
-      Math.max(1, safeW), 
-      Math.max(1, safeH)
-    );
-    const data = imageData.data;
-    let darkPixels = 0;
-
+    const data = ctx.getImageData(x+(w*0.15), y+(h*0.15), w*0.7, h*0.7).data;
+    let dark = 0;
     for (let i = 0; i < data.length; i += 4) {
-      const brightness = (data[i] + data[i + 1] + data[i + 2]) / 3;
-      if (brightness < 165) darkPixels++;
+      if ((data[i] + data[i+1] + data[i+2]) / 3 < 165) dark++;
     }
-
-    return darkPixels / (safeW * safeH);
-  } catch (e) {
-    return 0;
-  }
+    return dark / (w*0.7 * h*0.7);
+  } catch { return 0; }
 };
 
 export const fileToBase64 = (file: File): Promise<string> => {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.readAsDataURL(file);
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = error => reject(error);
+  return new Promise((r, j) => {
+    const rd = new FileReader();
+    rd.readAsDataURL(file);
+    rd.onload = () => r(rd.result as string);
+    rd.onerror = e => j(e);
   });
 };
